@@ -58,13 +58,14 @@ mkdir -p data secrets && cp .env.example .env   # edit PUBLIC_URL and ALLOWED_EM
 # put pluggy.json and google-oauth.json in secrets/, then:
 sudo chown -R 10001:10001 data secrets
 docker run --rm -v "$PWD/data:/data" -v "$PWD/secrets:/secrets" \
-  ghcr.io/trainedloop/cashbook-mcp:0.2 cashbook-admin init
+  cashbook-mcp:local cashbook-admin init
 docker compose up -d
 ```
 
-> **Before the first release** the image is not published yet. Build it from this checkout with
-> `docker build -t cashbook-mcp:dev .`, use `cashbook-mcp:dev` in place of `ghcr.io/trainedloop/cashbook-mcp:0.2`
-> above, and point `image:` in `docker-compose.yml` at it.
+> **This fork builds the image from the checkout** (`docker build -t cashbook-mcp:local .`; `docker-compose.yml`
+> does the same with `build: .`) and never uses the published `ghcr.io/trainedloop/cashbook-mcp` image: use
+> `cashbook-mcp:local` in place of `ghcr.io/trainedloop/cashbook-mcp:0.2` above.
+> Without Google and without any network exposure, see [docs/local-stdio-mode.md](docs/local-stdio-mode.md).
 
 Upgrading from 0.1 recreates the store; see "Upgrading from 0.1" in the [tutorial](docs/tutorial.md).
 

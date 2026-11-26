@@ -51,15 +51,18 @@ def test_init_creates_keys_once(secrets_dir, tmp_path, capsys):
     assert len(session_key) >= 48
     assert _mode(secrets_dir / "db.key") == 0o600
     assert _mode(secrets_dir / "session.key") == 0o600
+    admin_token = (secrets_dir / "admin.token").read_text().strip()
+    assert len(admin_token) >= 32 and _mode(secrets_dir / "admin.token") == 0o600
     assert db_path.exists()
     assert FakePluggy.calls == 1
 
     assert cli.main(argv) == 0
     assert (secrets_dir / "db.key").read_text().strip() == db_key
     assert (secrets_dir / "session.key").read_text().strip() == session_key
+    assert (secrets_dir / "admin.token").read_text().strip() == admin_token
     assert _mode(secrets_dir / "db.key") == 0o600
     out = capsys.readouterr().out
-    assert db_key not in out and session_key not in out
+    assert db_key not in out and session_key not in out and admin_token not in out
     db = Database.open(db_path, db_key)
     db.close()
 
@@ -112,3 +115,10 @@ def test_unknown_command_is_an_error(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["nope"])
     assert exc.value.code != 0
+
+
+def test_init_works_without_google_credentials(secrets_dir, tmp_path):
+    (secrets_dir / "google-oauth.json").unlink()
+    argv = ["init", "--secrets", str(secrets_dir), "--db", str(tmp_path / "d" / "c.duckdb")]
+    assert cli.main(argv) == 0
+    assert (secrets_dir / "admin.token").exists()

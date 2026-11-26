@@ -23,12 +23,13 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from html import escape
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
+from urllib.parse import parse_qs
 
 import anyio
 import anyio.to_thread
@@ -38,7 +39,7 @@ from starlette.routing import Match, Route, request_response
 
 from cashbook_mcp.admin_web import spa
 from cashbook_mcp.admin_web.headers import SECURITY_HEADERS
-from cashbook_mcp.admin_web.identity import LoginError, OwnerIdentity
+from cashbook_mcp.admin_web.identity import LOCAL_TOKEN_PATH, LoginError, OwnerIdentity
 from cashbook_mcp.admin_web.session import (
     FLOW_COOKIE,
     FLOW_SECONDS,
@@ -62,7 +63,7 @@ from cashbook_mcp.admin_web.session import (
 )
 from cashbook_mcp.analysis import listing
 from cashbook_mcp.analysis.filters import jsonable
-from cashbook_mcp.config import Secrets, Settings
+from cashbook_mcp.config import LOCAL_OWNER_EMAIL, Secrets, Settings
 from cashbook_mcp.models import PURPOSES, ROLES
 from cashbook_mcp.pluggy.client import PluggyClient, PluggyError
 from cashbook_mcp.presenter import REVOKED
@@ -92,7 +93,7 @@ EXPIRED_TEXT = "This sign-in link expired, start again"
 NOT_ALLOWED_TEXT = "This Google account is not allowed"
 
 _SAFE_PATH = re.compile(r"^/admin(?:[/?][A-Za-z0-9/_\-.~%?=&]*)?$")
-_NO_RETURN = frozenset({LOGIN_PATH, LOGIN_CALLBACK_PATH, LOGOUT_PATH})
+_NO_RETURN = frozenset({LOGIN_PATH, LOGIN_CALLBACK_PATH, LOGOUT_PATH, LOCAL_TOKEN_PATH})
 # Pluggy item ids are UUIDs; anything else never reaches Pluggy (it is part of a request path there).
 _ITEM_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 
@@ -121,7 +122,14 @@ class AdminContext:
         return self.settings.public_url
 
     @property
+    def local(self) -> bool:
+        """Signed in with the local admin token instead of Google."""
+        return getattr(self.identity, "local", False) is True
+
+    @property
     def allowed_emails(self) -> frozenset[str]:
+        if self.local:
+            return frozenset({LOCAL_OWNER_EMAIL})
         return frozenset(e.strip().lower() for e in self.settings.allowed_emails)
 
 
@@ -441,28 +449,57 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
 
     async def auth_callback(request: Request) -> Response:
         """Whatever the outcome, a 500 included, the flow cookie is deleted."""
+        return await complete_login(request, request.query_params)
+
+    async def token_form(request: Request) -> Response:
+        state = request.query_params.get("state") or ""
+        body = (
+            '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in</title>'
+            '<meta name="viewport" content="width=device-width, initial-scale=1"></head><body>'
+            "<h1>Sign in</h1><p>Paste the admin token (the admin.token file in the secrets directory).</p>"
+            f'<form method="post" action="{LOCAL_TOKEN_PATH}">'
+            f'<input type="hidden" name="state" value="{escape(state)}">'
+            '<input type="password" name="token" autocomplete="off" autofocus required>'
+            '<button type="submit">Sign in</button></form></body></html>'
+        )
+        return HTMLResponse(body)
+
+    async def token_submit(request: Request) -> Response:
+        chunks = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_BODY_BYTES:
+                return _page("Sign-in failed", "Request too large.", "Sign in", LOGIN_PATH, 413)
+            chunks.append(chunk)
+        form = parse_qs(b"".join(chunks).decode("utf-8", "replace"), keep_blank_values=True)
+        params = {"state": (form.get("state") or [""])[0], "code": (form.get("token") or [""])[0]}
+        return await complete_login(request, params)
+
+    async def complete_login(request: Request, params: Mapping[str, str]) -> Response:
+        """Whatever the outcome, a 500 included, the flow cookie is deleted."""
         try:
-            resp = await finish_login(request)
+            resp = await finish_login(request, params)
         except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
             log.error("admin request failed path=%s error=%s", request.url.path, type(exc).__name__)
             resp = _internal_error(request.url.path)
         _clear_flow_cookie(resp)
         return resp
 
-    async def finish_login(request: Request) -> Response:
+    async def finish_login(request: Request, params: Mapping[str, str]) -> Response:
         now = ctx.now()
         flow = decode_flow(signer, request.cookies.get(FLOW_COOKIE), now)
-        state = request.query_params.get("state") or ""
+        state = params.get("state") or ""
         if flow is None or flow.kind != "login":
             return _expired()
         if not hmac.compare_digest(flow.state.encode("ascii"), state.encode("utf-8")):
             return _expired()
         if not login_states.claim(flow.state, now):
             return _expired()
-        if request.query_params.get("error"):
+        if params.get("error"):
             log.info("admin login cancelled")  # Google's error value is not logged: it is caller input
-            return _page("Sign-in cancelled", "Google sign-in was cancelled.", "Sign in", LOGIN_PATH, 400)
-        code = request.query_params.get("code")
+            return _page("Sign-in cancelled", "Sign-in was cancelled.", "Sign in", LOGIN_PATH, 400)
+        code = params.get("code")
         if not code:
             return _expired()
         try:
@@ -746,6 +783,11 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
     explicit = [
         route(LOGIN_PATH, login, "GET"),
         route(LOGIN_CALLBACK_PATH, auth_callback, "GET"),
+        *(
+            [route(LOCAL_TOKEN_PATH, token_form, "GET"), route(LOCAL_TOKEN_PATH, token_submit, "POST")]
+            if ctx.local
+            else []
+        ),
         route(LOGOUT_PATH, logout, "POST"),
         route("/admin/api/session", session_info, "GET"),
         route("/admin/api/connections", connections, "GET"),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -12,6 +13,7 @@ from google.auth.exceptions import GoogleAuthError
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
+LOCAL_TOKEN_PATH = "/admin/auth/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 _FAILED = "Google sign-in failed"
@@ -122,3 +124,29 @@ class GoogleIdentity:
         if isinstance(auth_time, bool) or not isinstance(auth_time, (int, float)):
             auth_time = None
         return OwnerLogin(email.lower(), float(auth_time) if auth_time is not None else None)
+
+
+class LocalTokenIdentity:
+    """Owner identity without Google: the owner proves possession of the local admin token (the
+    `admin.token` secret, created by `cashbook-admin init`). The sign-in is a form on the admin
+    page itself, so nothing leaves the host; there is one owner and no email allowlist."""
+
+    local = True
+
+    def __init__(self, token: str, owner_email: str) -> None:
+        self._token = token
+        self._owner = owner_email
+
+    def authorization_url(
+        self, redirect_uri: str, state: str, nonce: str, code_challenge: str,
+        *, max_age: int | None = None,
+    ) -> str:
+        # The "provider" is this server's own token form; it hands the typed token back as the code.
+        return f"{LOCAL_TOKEN_PATH}?{urlencode({'state': state})}"
+
+    def complete(
+        self, code: str, redirect_uri: str, code_verifier: str, nonce: str
+    ) -> OwnerLogin:
+        if not hmac.compare_digest(code.encode("utf-8"), self._token.encode("utf-8")):
+            raise LoginError("That token is not valid", "bad-token")
+        return OwnerLogin(self._owner, None)

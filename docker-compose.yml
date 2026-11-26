@@ -1,8 +1,8 @@
 services:
   cashbook:
-    # Published image. To build from this checkout instead: docker build -t cashbook-mcp:dev .
-    # and point image: at it.
-    image: ghcr.io/trainedloop/cashbook-mcp:0.2
+    # Always built from this checkout (and so from the pinned tag), never pulled from a registry.
+    build: .
+    image: cashbook-mcp:local
     restart: unless-stopped
     env_file: .env
     # No ports are published on purpose: put a TLS-terminating tunnel in front

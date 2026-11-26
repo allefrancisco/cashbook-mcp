@@ -12,6 +12,7 @@ dependencies = [
     "pytz>=2026.6",
     "google-auth>=2.35",
     "requests>=2.32",
+    "uvicorn>=0.30",  # the stdio mode serves the admin page with it
 ]
 
 [build-system]
