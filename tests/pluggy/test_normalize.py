@@ -205,4 +205,4 @@ def test_every_third_party_text_field_is_delimited_or_sanitised():
     plain = [snap.accounts[0].number, snap.accounts[0].subtype, snap.accounts[0].owner_tax_id,
              snap.investments[0].type]  # fmt: skip
     for v in plain:
-        assert "\u27e6" not in v and "\u27e7" not in v and len(v) <= 64
+        assert not v  # forged value fails the strict format: None or ""

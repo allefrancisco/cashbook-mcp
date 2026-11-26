@@ -6,7 +6,8 @@ unconditionally between MARK_UNTRUSTED and MARK_CLOSE; MARK_OPEN (the ":suspicio
 variant) is used instead of MARK_UNTRUSTED only when a heuristic also flags the text.
 Delimiting never depends on the heuristic, which is an aid, not a guarantee.
 Identifier-like fields (tax ids, account numbers, category and type codes) carry
-program logic, so they are sanitized and length-capped but not delimited.
+program logic, so they are not delimited: they are sanitized and must match a strict format
+(documents: digits/separators; codes: [A-Z0-9_]; categories: <=4 short words), otherwise None.
 """
 
 import re
@@ -61,6 +62,34 @@ def prepare_identifier(s: str | None) -> str | None:
     if not s:
         return None
     return s[:MAX_IDENTIFIER_CHARS]
+
+
+_DOCUMENT = re.compile(r"[0-9](?:[0-9.\-/ ]{0,38}[0-9Xx])?")
+_CODE = re.compile(r"[A-Z0-9_]{1,32}")
+_CATEGORY = re.compile(r"[A-Za-z][A-Za-z0-9 &/_\-]{0,39}")
+MAX_CATEGORY_WORDS = 4
+
+
+def prepare_document(s: str | None) -> str | None:
+    """Tax id / account number: digits plus the usual separators (.-/ space), optional
+    trailing check letter X, up to 40 chars. Anything else becomes None, never free text."""
+    s = prepare_identifier(s)
+    return s if s is not None and _DOCUMENT.fullmatch(s) else None
+
+
+def prepare_code(s: str | None) -> str | None:
+    """Enum-like code (payment method, account/investment type): ^[A-Z0-9_]{1,32}$.
+    Anything else becomes None."""
+    s = prepare_identifier(s)
+    return s if s is not None and _CODE.fullmatch(s) else None
+
+
+def prepare_category(s: str | None) -> str | None:
+    """Category label: short, at most 4 words, restricted alphabet. Anything else is None."""
+    s = prepare_identifier(s)
+    if s is None or not _CATEGORY.fullmatch(s) or len(s.split()) > MAX_CATEGORY_WORDS:
+        return None
+    return s
 
 
 def unwrap(s: str | None) -> str | None:
@@ -160,10 +189,10 @@ def apply_text_policy(t: Transaction, tool_names: frozenset[str]) -> Transaction
         description=delimit(description, flagged) if description else description,
         counterpart_name=delimit(counterpart, flagged) if counterpart else counterpart,
         merchant_name=delimit(merchant, flagged) if merchant else merchant,
-        counterpart_tax_id=prepare_identifier(t.counterpart_tax_id),
-        counterpart_account_number=prepare_identifier(t.counterpart_account_number),
-        pluggy_category=prepare_identifier(t.pluggy_category),
-        payment_method=prepare_identifier(t.payment_method),
+        counterpart_tax_id=prepare_document(t.counterpart_tax_id),
+        counterpart_account_number=prepare_document(t.counterpart_account_number),
+        pluggy_category=prepare_category(t.pluggy_category),
+        payment_method=prepare_code(t.payment_method),
         text_suspicious=flagged,
         suspicion_reasons=tuple(reasons),
     )

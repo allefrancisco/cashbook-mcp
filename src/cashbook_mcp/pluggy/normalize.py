@@ -5,8 +5,9 @@ from decimal import Decimal
 
 from cashbook_mcp.content import (
     apply_text_policy,
+    prepare_code,
     prepare_delimited,
-    prepare_identifier,
+    prepare_document,
 )
 from cashbook_mcp.models import (
     Account,
@@ -53,11 +54,11 @@ def _account(alias: str, a: dict) -> Account:
         id=a["id"],
         alias=alias,
         item_id=a.get("itemId") or "",
-        type=a["type"],
-        subtype=prepare_identifier(a.get("subtype")) or "",
+        type=prepare_code(a["type"]) or "",
+        subtype=prepare_code(a.get("subtype")) or "",
         name=prepare_delimited(a.get("name")) or "",
-        number=prepare_identifier(a.get("number")),
-        owner_tax_id=prepare_identifier(_doc(a.get("taxNumber"))),
+        number=prepare_document(a.get("number")),
+        owner_tax_id=prepare_document(_doc(a.get("taxNumber"))),
         balance=_req_dec(a.get("balance")),
         currency=a.get("currencyCode") or "BRL",
         credit_limit=_dec(credit.get("creditLimit")),
@@ -150,7 +151,7 @@ def normalize_snapshot(
             id=i["id"],
             alias=alias,
             item_id=i.get("itemId") or "",
-            type=prepare_identifier(i.get("type")) or "",
+            type=prepare_code(i.get("type")) or "",
             name=prepare_delimited(i.get("name")) or "",
             balance=_req_dec(i.get("balance")),
             currency=i.get("currencyCode") or "BRL",
@@ -166,8 +167,8 @@ def normalize_snapshot(
             investment_id=inv_id,
             date=_date(r["date"]),  # type: ignore[arg-type]
             trade_date=_date(r.get("tradeDate")),
-            type=prepare_identifier(r.get("type")) or "",
-            movement_type=prepare_identifier(r.get("movementType")),
+            type=prepare_code(r.get("type")) or "",
+            movement_type=prepare_code(r.get("movementType")),
             quantity=_dec(r.get("quantity")),
             value=_dec(r.get("value")),
             amount=_req_dec(r.get("amount")),
