@@ -84,6 +84,17 @@ def prepare_code(s: str | None) -> str | None:
     return s if s is not None and _CODE.fullmatch(s) else None
 
 
+UNKNOWN_CURRENCY = "XXX"  # ISO 4217 "no currency": never BRL, so v_flows keeps it out of the BRL totals
+
+
+def prepare_currency(s: str | None, default: str = "BRL") -> str:
+    """Currency code: absent gives `default`; a malformed one gives UNKNOWN_CURRENCY, never `default`,
+    so a foreign amount is not passed off as BRL."""
+    if s is None or s == "":
+        return default
+    return prepare_code(s) or UNKNOWN_CURRENCY
+
+
 def prepare_category(s: str | None) -> str | None:
     """Category label: short, at most 4 words, restricted alphabet. Anything else is None."""
     s = prepare_identifier(s)
