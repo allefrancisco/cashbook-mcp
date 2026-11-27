@@ -109,7 +109,8 @@ def test_sidecar_sits_on_the_firewalled_subnet():
 def test_readme_quick_start_has_local_build_note():
     text = (ROOT / "README.md").read_text()
     quick = text[text.index("## Quick start") : text.index("## Development")]
-    assert "docker build -t cashbook-mcp:dev ." in quick
+    assert "docker build -t cashbook-mcp:local ." in quick
+    assert "ghcr.io/trainedloop/cashbook-mcp:0.2" not in (ROOT / "docker-compose.yml").read_text()
 
 
 def test_workflows_install_httpfs_before_tests():

@@ -25,6 +25,10 @@ class ConfigError(Exception):
     """Invalid or missing configuration; the message names the variable or file."""
 
 
+TRANSPORTS = ("http", "stdio")
+LOCAL_OWNER_EMAIL = "owner@local"  # the single identity of the local-token admin sign-in
+
+
 @dataclass(frozen=True)
 class Settings:
     public_url: str
@@ -39,15 +43,30 @@ class Settings:
     log_level: str
     max_reclassify_per_day: int = 1000
     review_min_amount: Decimal = Decimal("500.00")
+    transport: str = "http"
+    admin_host: str = "0.0.0.0"  # stdio mode: where the local-token admin page listens
 
     @classmethod
-    def from_env(cls, env: Mapping[str, str] = os.environ) -> "Settings":
+    def from_env(cls, env: Mapping[str, str] = os.environ, *, google: bool = True) -> "Settings":
+        """`google=False` (no google-oauth.json): PUBLIC_URL and ALLOWED_EMAILS are optional, as the
+        admin page then signs in with a local token and the MCP server runs over stdio only."""
+        port = _int(env, "PORT", 8743)
         public_url = env.get("PUBLIC_URL", "").strip().rstrip("/")
         if not public_url:
-            raise ConfigError("PUBLIC_URL is required")
+            if google:
+                raise ConfigError("PUBLIC_URL is required")
+            public_url = f"http://localhost:{port}"
         emails = frozenset(e.strip().lower() for e in env.get("ALLOWED_EMAILS", "").split(",") if e.strip())
-        if not emails:
+        if not emails and google:
             raise ConfigError("ALLOWED_EMAILS must list at least one email")
+        transport = (env.get("MCP_TRANSPORT") or "http").strip().lower()
+        if transport not in TRANSPORTS:
+            raise ConfigError(f"MCP_TRANSPORT must be one of {', '.join(TRANSPORTS)}, got {transport!r}")
+        if transport == "http" and not google:
+            raise ConfigError(
+                "MCP_TRANSPORT=http needs google-oauth.json: without it the MCP endpoint would be "
+                "unauthenticated. Use MCP_TRANSPORT=stdio"
+            )
         history_months = _int(env, "HISTORY_MONTHS", 12)
         if history_months < 1:
             raise ConfigError(f"HISTORY_MONTHS must be a positive integer, got {history_months!r}")
@@ -60,13 +79,15 @@ class Settings:
             allowed_redirect_uris=_redirect_uris(env, "ALLOWED_REDIRECT_URIS"),
             secrets_dir=Path(env.get("SECRETS_DIR") or "/secrets"),
             db_path=Path(env.get("DB_PATH") or "/data/cashbook.duckdb"),
-            port=_int(env, "PORT", 8743),
+            port=port,
             refresh_at=_refresh_at(env.get("REFRESH_AT") or "06:00"),
             tz=_tz(env.get("TZ") or "America/Sao_Paulo"),
             history_months=history_months,
             log_level=(env.get("LOG_LEVEL") or "INFO").strip().upper(),
             max_reclassify_per_day=max_reclassify,
             review_min_amount=_decimal(env, "REVIEW_MIN_AMOUNT", Decimal("500.00")),
+            transport=transport,
+            admin_host=(env.get("ADMIN_HOST") or "0.0.0.0").strip(),
         )
 
 
@@ -75,32 +96,53 @@ class Secrets:
     # repr=False everywhere: a logged or traced Secrets must not leak values.
     pluggy_client_id: str = field(repr=False)
     pluggy_client_secret: str = field(repr=False)
-    google_client_id: str = field(repr=False)
-    google_client_secret: str = field(repr=False)
+    # None without google-oauth.json: no Google sign-in, the admin page then uses admin_token.
+    google_client_id: str | None = field(repr=False)
+    google_client_secret: str | None = field(repr=False)
     db_key: str = field(repr=False)
     session_key: str = field(repr=False)
+    admin_token: str | None = field(default=None, repr=False)
+
+    @property
+    def has_google(self) -> bool:
+        return self.google_client_id is not None and self.google_client_secret is not None
+
+
+def secrets_dir_from_env(env: Mapping[str, str] = os.environ) -> Path:
+    return Path(env.get("SECRETS_DIR") or "/secrets")
 
 
 def load_secrets(secrets_dir: Path) -> Secrets:
     pluggy = _read_json(secrets_dir / "pluggy.json")
-    google = _read_json(secrets_dir / "google-oauth.json")
     try:
-        web = google["web"]
-        values = (pluggy["clientId"], pluggy["clientSecret"], web["client_id"], web["client_secret"])
+        p_id, p_secret = pluggy["clientId"], pluggy["clientSecret"]
     except (KeyError, TypeError):
-        raise ConfigError(
-            "pluggy.json needs clientId/clientSecret and google-oauth.json needs web.client_id/client_secret"
-        ) from None
-    if not all(isinstance(v, str) and v.strip() for v in values):
-        raise ConfigError("pluggy.json and google-oauth.json values must be non-empty strings")
+        raise ConfigError("pluggy.json needs clientId/clientSecret") from None
+    if not all(isinstance(v, str) and v.strip() for v in (p_id, p_secret)):
+        raise ConfigError("pluggy.json values must be non-empty strings")
+    g_id = g_secret = None
+    google_path = secrets_dir / "google-oauth.json"
+    if google_path.exists():  # present means it must be valid: a typo must not silently drop Google
+        google = _read_json(google_path)
+        try:
+            web = google["web"]
+            g_id, g_secret = web["client_id"], web["client_secret"]
+        except (KeyError, TypeError):
+            raise ConfigError("google-oauth.json needs web.client_id/client_secret") from None
+        if not all(isinstance(v, str) and v.strip() for v in (g_id, g_secret)):
+            raise ConfigError("google-oauth.json values must be non-empty strings")
+        g_id, g_secret = g_id.strip(), g_secret.strip()
     db_key = _read_text(secrets_dir / "db.key")
     if not _HEX64.fullmatch(db_key):
         raise ConfigError("db.key must be 64 hex characters")
     session_key = _read_text(secrets_dir / "session.key")
     if not session_key:
         raise ConfigError("session.key is empty")
-    p_id, p_secret, g_id, g_secret = (v.strip() for v in values)
-    return Secrets(p_id, p_secret, g_id, g_secret, db_key, session_key)
+    token_path = secrets_dir / "admin.token"
+    admin_token = _read_text(token_path) if token_path.exists() else None
+    if admin_token is not None and len(admin_token) < 32:
+        raise ConfigError("admin.token must have at least 32 characters")
+    return Secrets(p_id.strip(), p_secret.strip(), g_id, g_secret, db_key, session_key, admin_token)
 
 
 def _read_text(path: Path) -> str:

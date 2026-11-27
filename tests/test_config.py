@@ -69,7 +69,7 @@ def test_load_secrets(tmp_path):
     assert sec.session_key == "k" * 64
 
 
-@pytest.mark.parametrize("name", ["pluggy.json", "google-oauth.json", "db.key", "session.key"])
+@pytest.mark.parametrize("name", ["pluggy.json", "db.key", "session.key"])
 def test_missing_secret_file_raises(tmp_path, name):
     _write_secrets(tmp_path)
     (tmp_path / name).unlink()
@@ -99,3 +99,53 @@ def test_reclassify_and_review_settings_parse():
     s = Settings.from_env({**BASE, "MAX_RECLASSIFY_PER_DAY": "5", "REVIEW_MIN_AMOUNT": "0"})
     assert s.max_reclassify_per_day == 5
     assert s.review_min_amount == Decimal(0)
+
+
+def test_google_credentials_are_optional(tmp_path):
+    _write_secrets(tmp_path)
+    (tmp_path / "google-oauth.json").unlink()
+    sec = load_secrets(tmp_path)
+    assert sec.google_client_id is None and sec.google_client_secret is None
+    assert not sec.has_google
+    assert sec.admin_token is None
+    assert (sec.pluggy_client_id, sec.db_key) == ("cid", "ab" * 32)
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["not json", "{}", json.dumps({"web": {"client_id": "g"}}), json.dumps({"web": {"client_id": " ", "client_secret": "s"}})],
+)
+def test_present_but_invalid_google_file_still_raises(tmp_path, content):
+    _write_secrets(tmp_path)
+    (tmp_path / "google-oauth.json").write_text(content)
+    with pytest.raises(ConfigError, match="google-oauth.json"):
+        load_secrets(tmp_path)
+
+
+def test_admin_token_is_read_and_must_be_long_enough(tmp_path):
+    _write_secrets(tmp_path)
+    (tmp_path / "admin.token").write_text("t" * 43 + "\n")
+    sec = load_secrets(tmp_path)
+    assert sec.admin_token == "t" * 43
+    assert "t" * 43 not in repr(sec)
+    (tmp_path / "admin.token").write_text("short")
+    with pytest.raises(ConfigError, match="admin.token"):
+        load_secrets(tmp_path)
+
+
+def test_settings_without_google_need_no_public_url_or_emails():
+    s = Settings.from_env({"MCP_TRANSPORT": "stdio", "PORT": "9000"}, google=False)
+    assert s.transport == "stdio"
+    assert s.public_url == "http://localhost:9000"
+    assert s.allowed_emails == frozenset()
+
+
+def test_http_transport_without_google_is_refused():
+    with pytest.raises(ConfigError, match="unauthenticated"):
+        Settings.from_env({}, google=False)  # http is the default transport
+    with pytest.raises(ConfigError, match="MCP_TRANSPORT"):
+        Settings.from_env({**BASE, "MCP_TRANSPORT": "carrier-pigeon"})
+
+
+def test_transport_defaults_to_http_with_google():
+    assert Settings.from_env(BASE).transport == "http"

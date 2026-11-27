@@ -15,6 +15,8 @@ from cashbook_mcp.store.db import Database, DatabaseOpenError, MigrationError
 KEY_FILES = {
     "db.key": lambda: secrets.token_hex(32),
     "session.key": lambda: secrets.token_urlsafe(48),
+    # Sign-in token of the admin page when Google is not configured (never printed).
+    "admin.token": lambda: secrets.token_urlsafe(32),
 }
 
 

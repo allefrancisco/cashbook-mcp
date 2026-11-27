@@ -10,7 +10,7 @@ An MCP server, read-only toward your banks, that syncs your bank accounts, cards
 - Keeps the history it has seen in one DuckDB file encrypted with a key that never sits next to the data. Pluggy only provides a limited window; yours keeps growing.
 - Classifies transactions (spending, income, internal transfers, card bill payments) so totals are not double counted, with personal, business and consolidated scopes for owners who run a company.
 - Tracks net worth from daily balance snapshots, forecasts cash for the next 30 to 90 days and reports changes in recurring charges.
-- Lets the assistant fix a classification after asking you: journaled, capped and reversible.
+- Lets the assistant fix a classification after asking you: journaled, capped and reversible (undo puts back the label the transaction had before the batch).
 - Offers an owner page at `/admin` to connect banks with MeuPluggy, set each connection's role and each account's purpose, reload and disconnect.
 - One owner per instance: only Google logins in `ALLOWED_EMAILS` get a token or an admin session.
 
@@ -45,7 +45,7 @@ Prompts: `monthly_review`, `subscriptions_audit`, `upcoming_bills`, `review_clas
 - Locally there is one write path: the assistant can set the kind and/or category of specific transactions. Every change is journaled, reversible and capped per day.
 - Only a verified Google login listed in `ALLOWED_EMAILS` can use the connector or `/admin`.
 - `query_sql` allows one `SELECT`/`WITH` statement, parsed by DuckDB, on a locked-down reader connection: no files, network, extensions, `ATTACH` or writes. 10 s timeout, 1,000 rows.
-- Transaction text is written by third parties (anyone can send you a PIX with a message). It is cleaned, capped and wrapped in untrusted markers when suspicious, and the tool descriptions say it is data, not instructions.
+- Transaction text is written by third parties (anyone can send you a PIX with a message). It is cleaned, capped and always wrapped in untrusted markers (marked suspicious when a heuristic also flags it), and the tool descriptions say it is data, not instructions.
 - The database file is encrypted; the key lives in `secrets/db.key`, outside the data volume.
 - It does not defend against a shell on the host. See [SECURITY.md](SECURITY.md) and [docs/architecture.md](docs/architecture.md).
 
@@ -58,13 +58,14 @@ mkdir -p data secrets && cp .env.example .env   # edit PUBLIC_URL and ALLOWED_EM
 # put pluggy.json and google-oauth.json in secrets/, then:
 sudo chown -R 10001:10001 data secrets
 docker run --rm -v "$PWD/data:/data" -v "$PWD/secrets:/secrets" \
-  ghcr.io/trainedloop/cashbook-mcp:0.2 cashbook-admin init
+  cashbook-mcp:local cashbook-admin init
 docker compose up -d
 ```
 
-> **Before the first release** the image is not published yet. Build it from this checkout with
-> `docker build -t cashbook-mcp:dev .`, use `cashbook-mcp:dev` in place of `ghcr.io/trainedloop/cashbook-mcp:0.2`
-> above, and point `image:` in `docker-compose.yml` at it.
+> **This fork builds the image from the checkout** (`docker build -t cashbook-mcp:local .`; `docker-compose.yml`
+> does the same with `build: .`) and never uses the published `ghcr.io/trainedloop/cashbook-mcp` image: use
+> `cashbook-mcp:local` in place of `ghcr.io/trainedloop/cashbook-mcp:0.2` above.
+> Without Google and without any network exposure, see [docs/local-stdio-mode.md](docs/local-stdio-mode.md).
 
 Upgrading from 0.1 recreates the store; see "Upgrading from 0.1" in the [tutorial](docs/tutorial.md).
 

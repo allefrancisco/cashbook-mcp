@@ -127,6 +127,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pytz" },
     { name = "requests" },
+    { name = "uvicorn" },
 ]
 
 [package.dev-dependencies]
@@ -144,6 +145,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "pytz", specifier = ">=2026.6" },
     { name = "requests", specifier = ">=2.32" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [package.metadata.requires-dev]
